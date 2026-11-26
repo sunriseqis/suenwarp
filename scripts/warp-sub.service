@@ -1,0 +1,25 @@
+# 不在 Docker 里跑时用它：把二进制放到 /usr/local/bin/warp-sub
+#   sudo cp scripts/warp-sub.service /etc/systemd/system/
+#   sudo systemctl daemon-reload && sudo systemctl enable --now warp-sub
+[Unit]
+Description=warp-sub (Cloudflare WARP / VLESS subscription generator)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/var/lib/warp-sub
+ExecStart=/usr/local/bin/warp-sub -config /var/lib/warp-sub/config.yaml
+Restart=on-failure
+RestartSec=10
+# 账号文件里是私钥，别用 root 跑
+User=warp
+Group=warp
+StateDirectory=warp-sub
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/warp-sub
+
+[Install]
+WantedBy=multi-user.target

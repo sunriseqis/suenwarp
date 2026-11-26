@@ -1,0 +1,195 @@
+# warp-sub 配置示例
+# 复制为 config.yaml 后按需修改。
+
+listen: ":8080"
+# 面板与订阅链接的访问令牌。留空表示不鉴权（不建议暴露到公网）。
+token: "change-me"
+
+data_dir: "/data"
+# 每天扫描一次（分 时 * * *），也支持 @daily
+schedule: "0 4 * * *"
+timezone: "Asia/Shanghai"
+
+warp:
+  # 首次启动自动注册 WARP 设备，密钥写入 data/account.json
+  auto_register: true
+  # WARP+ 许可证，也可以在面板里填
+  license_key: ""
+  mtu: 1280
+  # 留空表示从账号的 client_id 推导；也可填 base64 或 hex
+  reserved: ""
+
+scan:
+  concurrency: 128        # 并发探测数，NAS 上建议 64~200
+  rounds: 5               # 每个候选探测次数（抖动/丢包基于此）
+  timeout_ms: 1200        # 单次探测超时
+  sample_per_subnet: 16   # 每个 /24 抽样多少个 IP，0 表示全量（256 个，很慢）
+
+  subnets:                # WARP WireGuard 入口网段
+    - 162.159.192.0/24
+    - 162.159.193.0/24
+    - 162.159.195.0/24
+    - 162.159.204.0/24
+    - 188.114.96.0/24
+    - 188.114.97.0/24
+    - 188.114.98.0/24
+    - 188.114.99.0/24
+
+  ports:                  # 同一 IP 换端口延迟差别很大，建议保留这批
+    - 2408
+    - 500
+    - 1701
+    - 4500
+    - 1018
+    - 854
+    - 880
+    - 890
+    - 903
+    - 934
+    - 939
+    - 942
+    - 943
+    - 946
+    - 955
+    - 968
+    - 987
+    - 1014
+    - 1074
+    - 1843
+
+  # WireGuard 走域名的候选（域名必须解析到 WARP 入口网段才有意义）
+  domain_targets:
+    - engage.cloudflareclient.com:2408
+
+  # MASQUE/HTTP3 入口（162.159.197-199 段行为与 WireGuard 段不同）
+  masque_hosts:
+    - 162.159.198.1
+    - 162.159.197.1
+    - 162.159.199.1
+  masque_port: 443
+  # Cloudflare MASQUE 入口要求的 SNI；只有做实验时才改
+  masque_sni:
+    - consumer-masque.cloudflareclient.com
+
+vless:
+  enabled: true
+  # 你的 edgetunnel Worker 域名（SNI / Host）
+  worker_host: "vpn.example.com"
+  uuid: "00000000-0000-0000-0000-000000000000"
+  path: "/"
+  fingerprint: "chrome"
+  port: 443
+  sni_hosts:
+    - "vpn.example.com"
+  # 从公开优选列表自动采集候选（会去重、解析、只保留落在 CF 网段的）
+  # 留空表示只用下面的 candidates
+  sources:
+    - https://bestcf.tools12345.com/domain/all.txt
+    - https://bestcf.tools12345.com/domain/mini.txt
+  max_candidates: 120     # 采集上限，防止源变得巨大时扫描失控
+
+  # 逐节点验证这些站点能不能访问。有些节点能跑通用流量，但打不开某个具体服务
+  #（出口 IP 被封、地区限制、反代轮换导致会话断裂），只看延迟和速率看不出来。
+  # 验证通过的节点会额外进一个 Clash 策略组 "可用 <域名>"，节点名里也会标 ✓/✗。
+  verify_domains:
+    - chatgpt.com
+    # - agy.example.com        # 换成你实际用的服务域名
+
+  # 出口探测：通过每个节点访问这个地址，拿到它真实的出口 IP 和国家。
+  # Cloudflare 会把同一个 worker 按接入地址路由到不同机房，
+  # 所以两个节点的出口国家可能完全不同 —— 这是「某些节点打不开某个服务」的主因。
+  egress_probe: "https://ipinfo.io/json"
+
+  # 只保留出口在这些国家的节点（留空 = 不过滤）。
+  # 会额外生成一个 Clash 策略组「出口合格」。
+  allowed_countries: []
+    # - JP
+    # - SG
+    # - US
+
+  # ECH：和 edgetunnel 后台的 ECH 开关对应。
+  # 开启后 v2ray 订阅里的节点会带上 ech= 参数（和 edg 自己生成的完全一致）。
+  ech:
+    enabled: true                 # 默认开，与 edgetunnel 的 ECH 开关对齐
+    public_name: "cloudflare-ech.com"
+    doh: "https://dns.alidns.com/dns-query"
+    # mihomo 需要具体的 base64 ECHConfigList 才会在 clash 配置里启用 ECH；
+    # 留空则 clash 侧不带 ech-opts（v2ray 侧照常带 vector）。
+    clash_config: ""
+
+  # 手工指定的接入地址：域名或 IP 都行，生成时逐个做 WS 握手验证
+  candidates:
+    - saas.sin.fan
+    - academy.7shifts.com
+    - www.crazygames.fr
+    - cf.nyanya.moe
+    - store.ubi.com
+    - www.sofi.com
+    - cf.1o.ee
+    - 104.21.73.146
+    - 162.159.192.1
+
+# 稳定性：节点要在最近几次扫描里反复出现才进订阅。
+# 用滑动窗口而不是严格连续，避免一次网络抖动就把订阅清空。
+stability:
+  min_hits: 1             # 1 = 关闭；2 表示最近几次里有 2 次上榜才算稳定
+  bootstrap: true         # 还没攒够历史时先用当前结果，避免订阅为空
+
+thresholds:               # 硬门槛，任一不达标即淘汰
+  max_latency_ms: 800     # 只作存活判断，不再主导排序
+  max_jitter_ms: 200
+  max_loss_pct: 20
+  min_speed_mbps: 5       # 真测速结果的下限
+  min_stability: 40       # 稳定性分下限（0-100）
+
+top:                      # 每类最终入选数量
+  wg: 8
+  wg_domain: 4
+  masque: 4
+  vless: 8
+
+speed_test:
+  enabled: true
+  # 测速目标必须是非 Cloudflare 的源：Worker 直连 CF 自己的 IP 有环路限制。
+  # 备选：https://ash-speed.hetzner.com/100MB.bin
+  url: "https://proof.ovh.net/files/100Mb.dat"
+  timeout_ms: 20000
+  required: false         # true: 测不出速率的节点不进订阅（调试期建议 false）
+  cooldown_ms: 30000      # 海量握手探测后先冷却，避免被 CF 限速
+
+  # 真测速只对短名单做，避免烧掉全部带宽
+  shortlist: 15           # 进入吞吐测试的节点数
+  duration_s: 15          # 每个节点下载多少秒
+  max_bytes_mb: 20        # 或者下载到多少 MB 就停（先到者）
+  idle_enabled: true      # 空闲存活测试（只对 VLESS 做）
+  idle_seconds: 60        # 挂连多久后再发请求
+
+subscription:
+  name: "warp-sub"
+  update_hours: 24
+  include_masque: true
+  test_url: "http://cp.cloudflare.com/generate_204"
+
+# 远端同步：把实测最优的 VLESS 接入地址写回 edgetunnel 的 ADD.txt。
+# 作用是让 edg 自己的订阅也用上好地址 —— 这样这台 NAS 关机时，
+# 客户端仍然能从 https://<worker域名>/sub?token=... 拉到最近一次的好节点。
+# 节点本身不会变好，只是多了一份"不依赖 NAS"的副本。
+# 首次启动后也可以在面板里填，面板填写的值存在 data/writeback.json。
+writeback:
+  enabled: false          # 默认关闭
+  base_url: ""            # 例: https://vpn.example.com（不要带 /admin）
+  password: ""            # edgetunnel 后台密码（ADMIN 变量）
+  auto: false             # true: 每次扫描后自动回写
+
+# v2rayA 联动：把本服务的订阅直接推进局域网里的 v2rayA。
+# 首次是导入，之后每次只刷新，不会重复添加。
+v2raya:
+  enabled: false
+  base_url: ""            # 例: http://192.168.1.2:2017
+  username: ""
+  password: ""
+  auto: false             # true: 每次扫描后自动同步
+  # 必须是 v2rayA 那台机器能访问到的地址，不能用 127.0.0.1
+  subscription_url: ""    # 例: http://192.168.1.10:8080/sub?target=v2ray&token=xxx
+
+log_level: "info"

@@ -1,0 +1,593 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>warp-sub 控制台</title>
+<style>
+  :root{
+    --bg:#0f1216; --card:#171c22; --line:#252d36; --fg:#e6edf3; --dim:#8b98a5;
+    --acc:#4c9aff; --ok:#3fb950; --bad:#f85149; --warn:#d29922;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--fg);font:14px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif}
+  header{padding:18px 24px;border-bottom:1px solid var(--line);display:flex;align-items:center;gap:12px;flex-wrap:wrap}
+  h1{font-size:16px;margin:0;font-weight:600;letter-spacing:.3px}
+  .tag{font-size:12px;color:var(--dim)}
+  main{padding:24px;max-width:1400px;margin:0 auto;display:grid;gap:18px}
+  .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(320px,1fr));gap:18px}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:18px;min-width:0;overflow:hidden}
+  .card h2{font-size:13px;margin:0 0 14px;color:var(--dim);font-weight:600;letter-spacing:.5px;text-transform:uppercase}
+  label{display:block;font-size:12px;color:var(--dim);margin-bottom:6px}
+  input{width:100%;padding:9px 11px;background:#0d1117;border:1px solid var(--line);border-radius:8px;color:var(--fg);font-size:13px;font-family:inherit}
+  input:focus{outline:none;border-color:var(--acc)}
+  button{padding:9px 16px;border-radius:8px;border:1px solid var(--line);background:#21262d;color:var(--fg);cursor:pointer;font-size:13px;font-family:inherit}
+  button:hover{border-color:var(--acc)}
+  button.primary{background:var(--acc);border-color:var(--acc);color:#04121f;font-weight:600}
+  button:disabled{opacity:.45;cursor:not-allowed}
+  .row{display:flex;gap:10px;align-items:center;flex-wrap:wrap}
+  .kv{display:flex;justify-content:space-between;padding:7px 0;border-bottom:1px dashed var(--line);font-size:13px}
+  .kv:last-child{border:none}
+  .kv span:first-child{color:var(--dim)}
+  .pill{display:inline-block;padding:2px 9px;border-radius:99px;font-size:11px;border:1px solid var(--line)}
+  .pill.ok{color:var(--ok);border-color:#1d4429;background:#0d2818}
+  .pill.bad{color:var(--bad);border-color:#4a1d1d;background:#2a0f0f}
+  table{width:100%;border-collapse:collapse;font-size:12.5px}
+  th,td{text-align:left;padding:8px 10px;border-bottom:1px solid var(--line);white-space:nowrap}
+  th{color:var(--dim);font-weight:500;position:sticky;top:0;background:var(--card)}
+  td.num{text-align:right;font-variant-numeric:tabular-nums}
+  .scroll{max-height:460px;overflow:auto;border:1px solid var(--line);border-radius:10px;min-width:0}
+  .scroll table{min-width:max-content}
+  .muted{color:var(--dim);font-size:12px}
+  .err{color:var(--bad);font-size:12.5px;margin-top:8px}
+  .ok{color:var(--ok)}
+  code{background:#0d1117;padding:2px 6px;border-radius:5px;font-size:12px;word-break:break-all}
+  .link{display:flex;gap:8px;align-items:center;margin-bottom:8px;flex-wrap:wrap}
+  .link code{flex:1;min-width:220px}
+</style>
+</head>
+<body>
+<header>
+  <h1>warp-sub</h1>
+  <span class="tag">Cloudflare WARP / VLESS 优选订阅</span>
+  <div style="flex:1"></div>
+  <span id="status" class="tag">未连接</span>
+  <a href="/simple" style="font-size:13px;color:var(--acc);text-decoration:none;margin-left:12px">极简页 →</a>
+</header>
+
+<main>
+  <section class="card" id="subCard" style="display:none">
+    <h2>订阅入口（固定链接，加入客户端后无需再改）</h2>
+    <div class="link"><span class="pill ok">Clash / mihomo</span><code id="subClash"></code><button data-copy="subClash">复制</button></div>
+    <div class="link"><span class="pill ok">v2rayA</span><code id="subV2"></code><button data-copy="subV2">复制</button></div>
+    <div class="muted">v2rayA 不支持 MASQUE，v2ray 订阅会自动排除该类型。</div>
+  </section>
+
+  <section class="card" id="loginCard">
+    <h2>访问令牌</h2>
+    <div class="row">
+      <input id="token" type="password" placeholder="config.yaml 里的 token，未设置则留空">
+      <button class="primary" id="btnConnect">连接</button>
+    </div>
+    <div class="err" id="loginErr"></div>
+  </section>
+
+  <div class="grid" id="dash" style="display:none">
+
+    <section class="card">
+      <h2>账号</h2>
+      <div id="accountBox"></div>
+      <label style="margin-top:14px">WARP+ License</label>
+      <div class="row">
+        <input id="license" placeholder="xxxxxxxx-xxxxxxxx-xxxxxxxx">
+        <button id="btnLicense">绑定</button>
+      </div>
+      <div class="err" id="licenseErr"></div>
+    </section>
+
+    <section class="card">
+      <h2>扫描</h2>
+      <div id="scanBox"></div>
+      <div class="row" style="margin-top:14px">
+        <button class="primary" id="btnScan">立即扫描</button>
+        <button id="btnFullScan">全量扫描</button>
+        <span class="muted" id="scanHint"></span>
+      </div>
+    </section>
+
+  </div>
+
+  <section class="card" id="nodesCard" style="display:none">
+    <h2>已入选节点</h2>
+    <div class="scroll"><table id="nodesTable"></table></div>
+  </section>
+
+  <section class="card" id="v2aCard" style="display:none">
+    <h2>v2rayA 联动</h2>
+    <div class="muted" style="margin-bottom:12px">
+      把本服务的订阅直接推进你局域网里的 v2rayA。首次会导入，之后每次只刷新，
+      不会重复添加。
+    </div>
+    <label>v2rayA 地址</label>
+    <input id="v2aUrl" placeholder="http://192.168.1.2:2017">
+    <div class="row" style="margin-top:10px">
+      <div style="flex:1"><label>用户名</label><input id="v2aUser" placeholder="登录用户名"></div>
+      <div style="flex:1"><label>密码</label><input id="v2aPass" type="password" placeholder="留空表示不修改"></div>
+    </div>
+    <label style="margin-top:10px">v2rayA 可访问的订阅地址</label>
+    <input id="v2aSub" placeholder="http://<本机局域网IP>:8080/sub?target=v2ray&token=...">
+    <div class="muted" style="margin-top:6px">必须是 v2rayA 那台机器能访问到的地址，不能用 127.0.0.1。</div>
+    <div class="row" style="margin-top:12px">
+      <label class="row" style="gap:6px;margin:0"><input id="v2aEnabled" type="checkbox" style="width:auto"> 启用联动</label>
+      <label class="row" style="gap:6px;margin:0"><input id="v2aAuto" type="checkbox" style="width:auto"> 每次扫描后自动同步</label>
+    </div>
+    <div class="row" style="margin-top:12px">
+      <button id="btnV2aSave">保存</button>
+      <button id="btnV2aTest">测试连接</button>
+      <button class="primary" id="btnV2aSync">立即同步</button>
+      <span class="muted" id="v2aState"></span>
+    </div>
+    <div class="err" id="v2aErr"></div>
+    <div id="v2aSubs" class="muted" style="margin-top:10px"></div>
+  </section>
+
+  <section class="card" id="cfgCard" style="display:none">
+    <h2>配置 <span class="muted">（保存后立即生效，标「需重启」的除外）</span></h2>
+    <div id="cfgForm" class="grid" style="gap:18px"></div>
+    <div class="row" style="margin-top:16px">
+      <button class="primary" id="btnCfgSave">保存配置</button>
+      <button id="btnCfgReload">放弃修改</button>
+      <span class="muted" id="cfgState"></span>
+    </div>
+    <div class="err" id="cfgErr"></div>
+    <div id="cfgEnv" class="muted" style="margin-top:12px"></div>
+  </section>
+
+  <section class="card" id="wbCard" style="display:none">
+    <h2>远端同步（回写 edgetunnel）</h2>
+    <div class="muted" style="margin-bottom:12px">
+      把实测最优的 VLESS 接入地址写进你 edgetunnel 的 <code>ADD.txt</code>，
+      这样即使这台 NAS 关机，edg 自己的订阅仍然可用。
+    </div>
+    <label>edgetunnel 地址</label>
+    <input id="wbUrl" placeholder="https://vpn.example.com（不带 /admin）">
+    <label style="margin-top:10px">后台密码</label>
+    <input id="wbPass" type="password" placeholder="留空表示不修改已保存的密码">
+    <div class="row" style="margin-top:12px">
+      <label class="row" style="gap:6px;margin:0"><input id="wbEnabled" type="checkbox" style="width:auto"> 启用回写</label>
+      <label class="row" style="gap:6px;margin:0"><input id="wbAuto" type="checkbox" style="width:auto"> 每次扫描后自动同步</label>
+    </div>
+    <div class="row" style="margin-top:12px">
+      <button id="btnWbSave">保存</button>
+      <button class="primary" id="btnWbSync">立即同步</button>
+      <span class="muted" id="wbState"></span>
+    </div>
+    <div class="err" id="wbErr"></div>
+  </section>
+
+  <section class="card" id="trendCard" style="display:none">
+    <h2>历史趋势 <span class="muted">(最近 30 次扫描)</span></h2>
+    <div id="trendChart"></div>
+    <div class="scroll" style="max-height:260px;margin-top:14px"><table id="trendTable"></table></div>
+  </section>
+
+  <section class="card" id="rejCard" style="display:none">
+    <h2>被淘汰的候选 <span class="muted">(按延迟排序，最多 300 条)</span></h2>
+    <div class="scroll"><table id="rejTable"></table></div>
+  </section>
+</main>
+
+<script>
+const $ = id => document.getElementById(id);
+let TOKEN = localStorage.getItem('warpsub_token') || '';
+let timer = null;
+
+function api(path, opts = {}) {
+  opts.headers = Object.assign({}, opts.headers, { 'X-Warp-Token': TOKEN });
+  return fetch(path, opts).then(async r => {
+    const text = await r.text();
+    try { return JSON.parse(text); } catch { return { raw: text, status: r.status }; }
+  });
+}
+
+function esc(s) {
+  return String(s == null ? '' : s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+}
+function num(v, d = 0) { return v ? Number(v).toFixed(d) : '-'; }
+function classTag(c) {
+  return { wg: 'WG', wg_domain: 'WGD', masque: 'MQ', vless: 'VL' }[c] || c;
+}
+
+function renderAccount(a, m) {
+  if (!a || !a.registered) {
+    $('accountBox').innerHTML = '<div class="muted">尚未注册 WARP 账号</div>';
+    return;
+  }
+  const plus = (a.account_type || '').includes('plus');
+  $('accountBox').innerHTML = `
+    <div class="kv"><span>状态</span><span class="pill ${plus ? 'ok' : ''}">${plus ? 'WARP+' : (a.account_type || 'free')}</span></div>
+    <div class="kv"><span>隧道地址</span><span>${esc(a.address_v4 || '-')}</span></div>
+    <div class="kv"><span>Client ID</span><span>${esc(a.client_id || '-')}</span></div>
+    <div class="kv"><span>License</span><span>${esc(a.license || '未绑定')}</span></div>
+    <div class="kv"><span>MASQUE 设备</span><span class="pill ${m && m.registered ? 'ok' : 'bad'}">${m && m.registered ? '已注册 · ' + esc(m.address_v4 || '-') : '未注册'}</span></div>`;
+  if (a.license) $('license').value = a.license;
+}
+
+function diagLine(c) {
+  if (!c) return '-';
+  const label = { ok: '正常', tls_blocked: 'TLS 不可用', connect_failed: '隧道失败', no_data: '无数据', failed: '其他失败' };
+  const parts = Object.entries(c).map(([k, v]) => `<span class="pill ${k === 'ok' ? 'ok' : 'bad'}">${label[k] || k} ${v}</span>`);
+  return parts.join(' ') || '-';
+}
+
+function renderScan(s) {
+  $('scanBox').innerHTML = `
+    <div class="kv"><span>上次扫描</span><span>${esc(s.generated_at || '从未')}</span></div>
+    <div class="kv"><span>耗时</span><span>${s.duration_sec ? Number(s.duration_sec).toFixed(0) + ' 秒' : '-'}</span></div>
+    <div class="kv"><span>候选 / 入选</span><span>${s.candidates || 0} / ${s.passed || 0}</span></div>
+    <div class="kv"><span>测速诊断</span><span>${diagLine(s.diag_counts)}</span></div>
+    <div class="kv"><span>分类</span><span>${
+      Object.entries(s.counts || {}).map(([k, v]) => `<span class="pill">${classTag(k)} ${v}</span>`).join(' ') || '-'
+    }</span></div>`;
+  $('scanHint').textContent = s.running ? '扫描进行中…' : '';
+  $('btnScan').disabled = !!s.running;
+}
+
+function domainMarks(n) {
+  const d = n.domain_ok || {};
+  const keys = Object.keys(d);
+  if (!keys.length) return '-';
+  return keys.map(k => {
+    const short = k.split('.')[0];
+    return d[k] ? `<span class="pill ok">${esc(short)}</span>` : `<span class="pill bad">${esc(short)}</span>`;
+  }).join(' ');
+}
+
+function stabilityHint(n) {
+  const parts = [];
+  if (n.speed_cv !== undefined && n.measured) parts.push('CV ' + Number(n.speed_cv).toFixed(2));
+  if (n.stall_pct) parts.push('卡顿 ' + Math.round(n.stall_pct) + '%');
+  if (n.max_stall_s) parts.push('最长断流 ' + n.max_stall_s + 's');
+  return parts.length ? parts.join(' · ') : '稳定性：尾部/峰值 + 速率变异 + 断流';
+}
+
+function renderNodes(nodes) {
+  if (!nodes || !nodes.length) { $('nodesCard').style.display = 'none'; return; }
+  $('nodesCard').style.display = '';
+  let h = '<thead><tr><th>类型</th><th>节点</th><th>延迟</th><th>速率 峰→尾</th><th>稳定</th><th>空闲</th><th>出口</th><th>站点</th><th>评分</th><th>连续</th></tr></thead><tbody>';
+  for (const n of nodes) {
+    h += `<tr><td><span class="pill">${classTag(n.class)}</span></td>
+      <td>${esc(n.server)}:${n.port}${n.sni ? ' <span class="muted">SNI ' + esc(n.sni) + '</span>' : ''}</td>
+      <td class="num">${num(n.latency_ms)}ms</td>
+      <td class="num">${n.speed_peak_mbps
+        ? num(n.speed_peak_mbps, 1) + (n.speed_tail_mbps ? '→' + num(n.speed_tail_mbps, 1) : '') + 'M'
+        : '<span class="muted" title="' + esc(n.speed_diag_text || n.speed_error || '未测') + '">✗</span>'}</td>
+      <td class="num" title="${esc(stabilityHint(n))}">${n.stability ? num(n.stability, 0) : '-'}</td>
+      <td class="num">${n.idle_detail ? (n.idle_ok ? '<span class="ok">✓</span>' : '<span style="color:var(--bad)">✗</span>') : '-'}</td>
+      <td>${n.egress_country ? `<span class="pill" title="${esc(n.egress_ip || '')} ${esc(n.egress_city || '')}">${esc(n.egress_country)}</span>` : '-'}</td>
+      <td>${domainMarks(n)}</td>
+      <td class="num">${n.measured ? num(n.score, 1) : '<span class="muted" title="未进入测速短名单，评分仅为粗排">未测</span>'}</td>
+      <td class="num">${n.streak ? n.streak + '次' : '-'}</td></tr>`;
+  }
+  $('nodesTable').innerHTML = h + '</tbody>';
+}
+
+function renderRejected(list) {
+  if (!list || !list.length) { $('rejCard').style.display = 'none'; return; }
+  $('rejCard').style.display = '';
+  let h = '<thead><tr><th>类型</th><th>节点</th><th>延迟</th><th>丢包</th><th>淘汰原因</th></tr></thead><tbody>';
+  for (const n of list) {
+    h += `<tr><td><span class="pill bad">${classTag(n.class)}</span></td>
+      <td>${esc(n.server)}:${n.port}</td><td class="num">${num(n.latency_ms)}ms</td>
+      <td class="num">${num(n.loss_pct)}%</td><td class="muted">${esc(n.reason || '')}</td></tr>`;
+  }
+  $('rejTable').innerHTML = h + '</tbody>';
+}
+
+function sparkline(points, w, h, color) {
+  if (!points.length) return '';
+  const max = Math.max(...points, 1), min = Math.min(...points, 0);
+  const span = (max - min) || 1;
+  const step = points.length > 1 ? w / (points.length - 1) : w;
+  const path = points.map((v, i) => {
+    const x = i * step;
+    const y = h - ((v - min) / span) * (h - 8) - 4;
+    return (i ? 'L' : 'M') + x.toFixed(1) + ',' + y.toFixed(1);
+  }).join(' ');
+  return `<svg viewBox="0 0 ${w} ${h}" preserveAspectRatio="none" style="width:100%;height:90px">
+    <path d="${path}" fill="none" stroke="${color}" stroke-width="2" stroke-linejoin="round"/>
+  </svg>`;
+}
+
+function renderTrend(hist) {
+  if (!hist || !hist.length) { $('trendCard').style.display = 'none'; return; }
+  $('trendCard').style.display = '';
+  const last = hist.slice(-30);
+  const lat = last.map(x => Number(x.best_latency_ms) || 0);
+  const okCount = last.map(x => Number(x.passed) || 0);
+  $('trendChart').innerHTML = `
+    <div class="muted">最优延迟 (ms)</div>${sparkline(lat, 600, 90, '#4c9aff')}
+    <div class="muted" style="margin-top:6px">入选节点数</div>${sparkline(okCount, 600, 90, '#3fb950')}`;
+
+  let h = '<thead><tr><th>时间</th><th>候选</th><th>入选</th><th>分类</th><th>最优延迟</th><th>平均延迟</th><th>最快速率</th><th>耗时</th></tr></thead><tbody>';
+  for (const e of last.slice().reverse()) {
+    const counts = Object.entries(e.counts || {}).map(([k, v]) => classTag(k) + ' ' + v).join(' ') || '-';
+    h += `<tr><td>${esc(e.at)}</td><td class="num">${e.candidates}</td><td class="num">${e.passed}</td>
+      <td>${counts}</td><td class="num">${num(e.best_latency_ms)}ms</td>
+      <td class="num">${num(e.avg_latency_ms)}ms</td>
+      <td class="num">${e.best_speed_mbps ? num(e.best_speed_mbps, 1) + 'M' : '-'}</td>
+      <td class="num">${num(e.duration_sec)}s</td></tr>`;
+  }
+  $('trendTable').innerHTML = h + '</tbody>';
+}
+
+async function renderV2raya() {
+  const r = await api('/api/v2raya');
+  if (!r || !r.ok || !r.v2raya) return;
+  const v = r.v2raya;
+  $('v2aCard').style.display = '';
+  $('v2aUrl').value = v.base_url || '';
+  $('v2aUser').value = v.username || '';
+  $('v2aEnabled').checked = !!v.enabled;
+  $('v2aAuto').checked = !!v.auto;
+  $('v2aPass').placeholder = v.has_password ? '已保存，留空则不修改' : '登录密码';
+  if (!$('v2aSub').value) {
+    $('v2aSub').value = v.subscription_url ||
+      (location.origin + '/sub?target=v2ray' + (TOKEN ? '&token=' + encodeURIComponent(TOKEN) : ''));
+  }
+  const last = v.last || {};
+  if (last.at) {
+    $('v2aState').innerHTML = last.ok
+      ? `<span class="ok">上次同步 ${esc(last.at)} · ${esc(last.message)} ${esc(last.action || '')}</span>`
+      : `<span style="color:var(--bad)">上次同步 ${esc(last.at)} · ${esc(last.message)}</span>`;
+  } else {
+    $('v2aState').textContent = v.enabled ? '已启用，尚未同步' : '未启用';
+  }
+}
+
+async function saveV2raya() {
+  $('v2aErr').textContent = '';
+  const r = await api('/api/v2raya', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      enabled: $('v2aEnabled').checked,
+      base_url: $('v2aUrl').value.trim(),
+      username: $('v2aUser').value.trim(),
+      password: $('v2aPass').value,
+      auto: $('v2aAuto').checked,
+      subscription_url: $('v2aSub').value.trim(),
+    }),
+  });
+  if (!r.ok) { $('v2aErr').textContent = r.error || '保存失败'; return; }
+  $('v2aPass').value = '';
+  renderV2raya();
+}
+
+async function testV2raya() {
+  $('v2aErr').textContent = '';
+  $('v2aState').textContent = '测试中…';
+  await saveV2raya();
+  const r = await api('/api/v2raya/test', { method: 'POST' });
+  if (!r.ok) { $('v2aErr').textContent = r.error || '连接失败'; $('v2aState').textContent = ''; return; }
+  const subs = r.subscriptions || [];
+  $('v2aState').innerHTML = `<span class="ok">连接成功，现有 ${subs.length} 个订阅</span>`;
+  $('v2aSubs').innerHTML = subs.map(x =>
+    `· #${x.id} ${esc(x.address)} <span class="muted">(${x.count} 节点)</span>`).join('<br>');
+}
+
+async function syncV2raya() {
+  $('v2aErr').textContent = '';
+  $('v2aState').textContent = '同步中…';
+  await saveV2raya();
+  const r = await api('/api/v2raya/sync', { method: 'POST' });
+  if (!r.ok) $('v2aErr').textContent = (r.result && r.result.message) || r.error || '同步失败';
+  renderV2raya();
+}
+
+function getPath(obj, path) {
+  return path.split('.').reduce((o, k) => (o == null ? undefined : o[k]), obj);
+}
+
+function parseList(str) {
+  const parts = String(str).split(/[,\n]/).map(x => x.trim()).filter(Boolean);
+  const allInt = parts.length > 0 && parts.every(p => /^-?\d+$/.test(p));
+  return allInt ? parts.map(Number) : parts;
+}
+
+function fieldInput(f, val) {
+  const id = 'cfg_' + f.key.replace(/\./g, '_');
+  if (f.type === 'bool') {
+    return `<label class="row" style="gap:8px;margin:2px 0"><input id="${id}" type="checkbox" style="width:auto" ${val ? 'checked' : ''}> <span>${esc(f.label)}</span></label>
+      ${f.help ? `<div class="muted" style="margin:-2px 0 8px 26px">${esc(f.help)}</div>` : ''}`;
+  }
+  let input;
+  if (f.type === 'int' || f.type === 'float') {
+    input = `<input id="${id}" type="number" step="${f.type === 'float' ? 'any' : '1'}" value="${val == null ? '' : esc(val)}">`;
+  } else if (f.type === 'text') {
+    input = `<textarea id="${id}" rows="3" style="width:100%;padding:9px 11px;background:#0d1117;border:1px solid var(--line);border-radius:8px;color:var(--fg);font-size:13px;font-family:inherit">${val == null ? '' : esc(val)}</textarea>`;
+  } else if (f.type === 'list') {
+    const shown = Array.isArray(val) ? val.join(', ') : (val == null ? '' : String(val));
+    input = `<input id="${id}" type="text" value="${esc(shown)}" placeholder="逗号分隔">`;
+  } else {
+    input = `<input id="${id}" type="${f.secret ? 'password' : 'text'}" value="${val == null ? '' : esc(val)}">`;
+  }
+  return `<label style="margin-top:10px">${esc(f.label)}${f.restart ? ' <span class="pill">需重启</span>' : ''}</label>${input}
+    ${f.help ? `<div class="muted" style="margin-top:4px">${esc(f.help)}</div>` : ''}`;
+}
+
+async function renderConfig() {
+  const r = await api('/api/config');
+  if (!r || !r.ok) return;
+  $('cfgCard').style.display = '';
+  const values = r.values || {};
+  let html = '';
+  for (const g of (r.groups || [])) {
+    html += `<div><div class="muted" style="margin-bottom:4px;font-weight:600">${esc(g.title)}</div>`;
+    for (const f of (g.fields || [])) {
+      html += fieldInput(f, getPath(values, f.key));
+    }
+    html += '</div>';
+  }
+  $('cfgForm').innerHTML = html;
+  const envs = Object.entries(r.env || {});
+  $('cfgEnv').innerHTML = envs.length
+    ? '以下环境变量会覆盖面板设置：' + envs.map(([k, v]) => `<code>${esc(k)}=${esc(v)}</code>`).join(' ')
+    : '';
+  window.__cfgGroups = r.groups || [];
+}
+
+async function saveConfig() {
+  $('cfgErr').textContent = '';
+  $('cfgState').textContent = '保存中…';
+  const values = {};
+  for (const g of (window.__cfgGroups || [])) {
+    for (const f of g.fields) {
+      const el = $('cfg_' + f.key.replace(/\./g, '_'));
+      if (!el) continue;
+      if (f.type === 'bool') values[f.key] = el.checked;
+      else if (f.type === 'int' || f.type === 'float') {
+        if (el.value.trim() === '') continue;
+        values[f.key] = Number(el.value);
+      }
+      else if (f.type === 'list') values[f.key] = parseList(el.value);
+      else values[f.key] = el.value;
+    }
+  }
+  const r = await api('/api/config', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ values }),
+  });
+  if (!r.ok) {
+    $('cfgState').textContent = '';
+    $('cfgErr').innerHTML = (r.errors || [r.error || '保存失败']).map(e => '· ' + esc(e)).join('<br>');
+    return;
+  }
+  $('cfgState').innerHTML = r.restart && r.restart.length
+    ? `<span style="color:var(--warn)">已保存，以下项需重启生效：${esc(r.restart.join('、'))}</span>`
+    : '<span class="ok">已保存并生效</span>';
+  renderConfig();
+}
+
+$('btnCfgSave').onclick = saveConfig;
+$('btnCfgReload').onclick = renderConfig;
+
+async function renderWriteback() {
+  const r = await api('/api/writeback');
+  if (!r || !r.ok || !r.writeback) return;
+  const w = r.writeback;
+  $('wbCard').style.display = '';
+  $('wbUrl').value = w.base_url || '';
+  $('wbEnabled').checked = !!w.enabled;
+  $('wbAuto').checked = !!w.auto;
+  $('wbPass').placeholder = w.has_password ? '已保存，留空则不修改' : '后台密码';
+  const last = w.last || {};
+  if (last.at) {
+    $('wbState').innerHTML = last.ok
+      ? `<span class="ok">上次同步 ${esc(last.at)} · ${esc(last.message)}</span>`
+      : `<span style="color:var(--bad)">上次同步 ${esc(last.at)} · ${esc(last.message)}</span>`;
+  } else {
+    $('wbState').textContent = w.enabled ? '已启用，尚未同步' : '未启用';
+  }
+}
+
+async function saveWriteback() {
+  $('wbErr').textContent = '';
+  const r = await api('/api/writeback', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      enabled: $('wbEnabled').checked,
+      base_url: $('wbUrl').value.trim(),
+      password: $('wbPass').value,
+      auto: $('wbAuto').checked,
+    }),
+  });
+  if (!r.ok) { $('wbErr').textContent = r.error || '保存失败'; return; }
+  $('wbPass').value = '';
+  renderWriteback();
+}
+
+async function syncWriteback() {
+  $('wbErr').textContent = '';
+  $('wbState').textContent = '同步中…';
+  const r = await api('/api/writeback/sync', { method: 'POST' });
+  if (!r.ok) { $('wbErr').textContent = (r.result && r.result.message) || r.error || '同步失败'; }
+  renderWriteback();
+}
+
+async function refresh() {
+  const s = await api('/api/state');
+  if (s.raw) { $('status').textContent = '令牌无效'; return; }
+  $('status').textContent = s.running ? '扫描中…' : '就绪';
+  $('dash').style.display = '';
+  $('loginCard').style.display = 'none';
+  renderAccount(s.account, s.masque);
+  renderScan(s);
+  renderNodes(s.nodes);
+  renderRejected(s.rejected);
+
+  const hist = await api('/api/history');
+  if (Array.isArray(hist)) renderTrend(hist);
+  await renderWriteback();
+  await renderV2raya();
+  await renderConfig();
+
+  $('subCard').style.display = '';
+  const origin = location.origin;
+  const q = TOKEN ? ('&token=' + encodeURIComponent(TOKEN)) : '';
+  $('subClash').textContent = origin + '/sub?target=clash' + q;
+  $('subV2').textContent = origin + '/sub?target=v2ray' + q;
+}
+
+function connect() {
+  TOKEN = $('token').value.trim();
+  localStorage.setItem('warpsub_token', TOKEN);
+  api('/api/state').then(s => {
+    if (s.raw) { $('loginErr').textContent = '令牌错误'; return; }
+    $('loginErr').textContent = '';
+    refresh();
+    if (timer) clearInterval(timer);
+    timer = setInterval(refresh, 5000);
+  });
+}
+
+$('btnConnect').onclick = connect;
+$('btnScan').onclick = async () => {
+  const r = await api('/api/scan', { method: 'POST' });
+  if (!r.ok) alert(r.error || '启动失败');
+  setTimeout(refresh, 800);
+};
+$('btnFullScan').onclick = async () => {
+  if (!confirm('全量扫描会把每个网段的 256 个地址全部测一遍，可能要好几个小时。确定开始？')) return;
+  const r = await api('/api/scan?full=1', { method: 'POST' });
+  if (!r.ok) alert(r.error || '启动失败');
+  setTimeout(refresh, 800);
+};
+$('btnV2aSave').onclick = saveV2raya;
+$('btnV2aTest').onclick = testV2raya;
+$('btnV2aSync').onclick = syncV2raya;
+$('btnWbSave').onclick = saveWriteback;
+$('btnWbSync').onclick = syncWriteback;
+$('btnLicense').onclick = async () => {
+  $('licenseErr').textContent = '';
+  const r = await api('/api/license', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ license: $('license').value.trim() })
+  });
+  if (!r.ok) $('licenseErr').textContent = r.error || '绑定失败';
+  else refresh();
+};
+document.querySelectorAll('[data-copy]').forEach(b => {
+  b.onclick = () => {
+    const t = $(b.dataset.copy).textContent;
+    navigator.clipboard.writeText(t).then(() => { b.textContent = '已复制'; setTimeout(() => b.textContent = '复制', 1500); });
+  };
+});
+
+if (TOKEN) { $('token').value = TOKEN; connect(); }
+</script>
+</body>
+</html>

@@ -1,0 +1,144 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>warp-sub</title>
+<style>
+  :root{--bg:#0f1216;--card:#171c22;--line:#252d36;--fg:#e6edf3;--dim:#8b98a5;--acc:#4c9aff;--ok:#3fb950;--bad:#f85149}
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--fg);font:15px/1.6 -apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC",sans-serif;padding:18px}
+  .wrap{max-width:720px;margin:0 auto;display:grid;gap:14px}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:18px}
+  h1{font-size:17px;margin:0 0 4px;font-weight:600}
+  .sub{color:var(--dim);font-size:13px}
+  .row{display:flex;gap:9px;align-items:center;flex-wrap:wrap}
+  input{flex:1;min-width:180px;padding:11px 13px;background:#0d1117;border:1px solid var(--line);border-radius:10px;color:var(--fg);font-size:14px}
+  button{padding:11px 17px;border-radius:10px;border:1px solid var(--line);background:#21262d;color:var(--fg);font-size:14px;cursor:pointer}
+  button.primary{background:var(--acc);border-color:var(--acc);color:#04121f;font-weight:600}
+  button:disabled{opacity:.45}
+  code{display:block;background:#0d1117;border:1px solid var(--line);border-radius:10px;padding:11px 13px;font-size:12.5px;word-break:break-all;color:#9fd0ff}
+  .pill{display:inline-block;padding:3px 10px;border-radius:99px;font-size:12px;border:1px solid var(--line);color:var(--dim)}
+  .pill.ok{color:var(--ok);border-color:#1d4429;background:#0d2818}
+  .pill.bad{color:var(--bad);border-color:#4a1d1d;background:#2a0f0f}
+  table{width:100%;border-collapse:collapse;font-size:13px}
+  th,td{text-align:left;padding:7px 4px;border-bottom:1px solid var(--line)}
+  th{color:var(--dim);font-weight:500}
+  td.n{text-align:right;font-variant-numeric:tabular-nums}
+  .muted{color:var(--dim);font-size:12.5px}
+  a{color:var(--acc);text-decoration:none;font-size:13px}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <div class="card">
+    <div class="row" style="justify-content:space-between">
+      <div>
+        <h1>warp-sub</h1>
+        <div class="sub" id="status">未连接</div>
+      </div>
+      <a href="/">完整面板 →</a>
+    </div>
+    <div class="row" id="login" style="margin-top:14px">
+      <input id="token" type="password" placeholder="访问令牌（没设置就留空）">
+      <button class="primary" id="btnConnect">进入</button>
+    </div>
+  </div>
+
+  <div id="main" style="display:none;display:grid;gap:14px">
+
+    <div class="card">
+      <div class="row" style="justify-content:space-between;margin-bottom:10px">
+        <b style="font-size:14px">Clash / mihomo</b>
+        <button data-copy="u1">复制</button>
+      </div>
+      <code id="u1"></code>
+      <div class="row" style="justify-content:space-between;margin:16px 0 10px">
+        <b style="font-size:14px">v2rayA</b>
+        <button data-copy="u2">复制</button>
+      </div>
+      <code id="u2"></code>
+      <div class="muted" style="margin-top:10px">链接不变，节点每天自动更新。</div>
+    </div>
+
+    <div class="card">
+      <div class="row" style="justify-content:space-between">
+        <div class="row" id="stats"></div>
+        <button class="primary" id="btnScan">立即扫描</button>
+      </div>
+    </div>
+
+    <div class="card">
+      <table id="tbl"></table>
+    </div>
+  </div>
+</div>
+
+<script>
+const $ = id => document.getElementById(id);
+let TOKEN = localStorage.getItem('warpsub_token') || '';
+let timer = null;
+
+function api(p, o = {}) {
+  o.headers = Object.assign({}, o.headers, { 'X-Warp-Token': TOKEN });
+  return fetch(p, o).then(r => r.text().then(t => { try { return JSON.parse(t); } catch { return { raw: t }; } }));
+}
+function esc(s){return String(s==null?'':s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));}
+const TAG = { wg:'WG', wg_domain:'WGD', masque:'MQ', vless:'VL' };
+
+async function refresh() {
+  const s = await api('/api/state');
+  if (s.raw) { $('status').textContent = '令牌无效'; return; }
+  $('login').style.display = 'none';
+  $('main').style.display = 'grid';
+  $('status').textContent = s.running
+    ? '扫描中…'
+    : `上次扫描 ${s.generated_at || '从未'} · ${s.passed || 0} 个节点 · ${s.duration_sec ? Math.round(s.duration_sec) + 's' : ''}`;
+
+  const q = TOKEN ? '&token=' + encodeURIComponent(TOKEN) : '';
+  $('u1').textContent = location.origin + '/sub?target=clash' + q;
+  $('u2').textContent = location.origin + '/sub?target=v2ray' + q;
+
+  $('btnScan').disabled = !!s.running;
+  const c = s.counts || {};
+  $('stats').innerHTML = Object.entries(c).map(([k, v]) => `<span class="pill">${TAG[k]||k} ${v}</span>`).join(' ')
+    || '<span class="pill">暂无节点</span>';
+
+  const nodes = (s.nodes || []).slice(0, 10);
+  let h = '<thead><tr><th>节点</th><th class="n">延迟</th><th class="n">稳定</th><th class="n">评分</th></tr></thead><tbody>';
+  for (const n of nodes) {
+    h += `<tr><td>${esc(n.server)}:${n.port}</td>
+      <td class="n">${n.latency_ms ? Math.round(n.latency_ms) + 'ms' : '-'}</td>
+      <td class="n">${n.stability ? Math.round(n.stability) : '-'}</td>
+      <td class="n">${n.score ? n.score.toFixed(0) : '-'}</td></tr>`;
+  }
+  $('tbl').innerHTML = nodes.length ? h + '</tbody>' : '<tbody><tr><td class="muted">还没有扫描结果</td></tr></tbody>';
+}
+
+$('btnConnect').onclick = () => {
+  TOKEN = $('token').value.trim();
+  localStorage.setItem('warpsub_token', TOKEN);
+  refresh();
+  if (timer) clearInterval(timer);
+  timer = setInterval(refresh, 5000);
+};
+$('btnScan').onclick = async () => {
+  const r = await api('/api/scan', { method: 'POST' });
+  if (!r.ok) alert(r.error || '启动失败');
+  setTimeout(refresh, 800);
+};
+document.querySelectorAll('[data-copy]').forEach(b => {
+  b.onclick = () => {
+    navigator.clipboard.writeText($(b.dataset.copy).textContent).then(() => {
+      b.textContent = '已复制'; setTimeout(() => b.textContent = '复制', 1200);
+    });
+  };
+});
+
+if (TOKEN) { $('token').value = TOKEN; }
+refresh();
+if (TOKEN) timer = setInterval(refresh, 5000);
+</script>
+</body>
+</html>
