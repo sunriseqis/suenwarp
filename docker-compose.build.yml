@@ -1,16 +1,12 @@
-# 本地从源码构建（不走 CI 镜像）
+# 本地从源码构建（不走 GHCR 镜像）
 services:
   warp-sub:
     build: .
-    image: warpsub:local
-    container_name: ${WARPSUB_NAME:-warp-sub}
+    image: suenwarp:latest
+    container_name: warp-sub
     restart: unless-stopped
-    env_file:
-      - .env
     environment:
-      WARPSUB_LISTEN: ":8080"
-      WARPSUB_DATA_DIR: "/data"
-      TZ: ${TZ:-Asia/Shanghai}
+      WARPSUB_TOKEN: "${WARPSUB_TOKEN:?部署前必须设置 WARPSUB_TOKEN：cp .env.example .env 并填写}"
     ports:
       - "${WARPSUB_PORT:-8080}:8080"
     volumes:

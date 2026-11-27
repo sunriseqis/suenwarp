@@ -10,6 +10,7 @@ from urllib.parse import parse_qs, unquote, urlparse
 import httpx
 import yaml
 
+from .netfetch import fetch_text
 from .vless_client import tcp_connect_ms
 
 RESTRICTED_NAME_RE = re.compile(
@@ -208,9 +209,9 @@ async def collect_and_probe_fallback(
         for url in sources:
             t0 = asyncio.get_event_loop().time()
             try:
-                resp = await client.get(url, headers={"User-Agent": "clash-verge/v2.0"})
+                resp = await fetch_text(client, url, headers={"User-Agent": "clash-verge/v2.0"})
                 ms = round((asyncio.get_event_loop().time() - t0) * 1000)
-                if resp.status_code != 200:
+                if not resp.ok:
                     if source_logs is not None:
                         source_logs.append({
                             "kind": "兜底订阅",
@@ -218,7 +219,7 @@ async def collect_and_probe_fallback(
                             "ok": False,
                             "count": 0,
                             "ms": ms,
-                            "message": f"HTTP {resp.status_code}",
+                            "message": resp.message,
                         })
                     continue
                 parsed = parse_subscription_text(resp.text)

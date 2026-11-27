@@ -1,28 +1,13 @@
 services:
   warp-sub:
-    image: ${WARPSUB_IMAGE:-ghcr.io/your-name/warp-sub:latest}
-    container_name: ${WARPSUB_NAME:-warp-sub}
+    image: ghcr.io/sunriseqis/suenwarp:latest
+    container_name: warp-sub
     restart: unless-stopped
-
-    env_file:
-      - .env
-
     environment:
-      # 容器内固定监听 8080，宿主机端口由 WARPSUB_PORT 决定
-      WARPSUB_DATA_DIR: "/data"
-      WARPSUB_STATIC_DIR: "/app/static"
-      WARPSUB_CONFIG: "/data/config.yaml"
-      TZ: ${TZ:-Asia/Shanghai}
-
+      # 部署时必须给定，未设置则 compose 直接报错退出，不会起一个无鉴权的面板。
+      WARPSUB_TOKEN: "${WARPSUB_TOKEN:?部署前必须设置 WARPSUB_TOKEN：cp .env.example .env 并填写}"
     ports:
+      # 容器内固定 8080，这里只决定宿主机端口
       - "${WARPSUB_PORT:-8080}:8080"
-
     volumes:
       - ./data:/data
-
-    healthcheck:
-      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/')"]
-      interval: 30s
-      timeout: 5s
-      retries: 3
-      start_period: 20s

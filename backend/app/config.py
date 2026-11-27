@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import copy
 import json
+import logging
 import os
 import threading
 from pathlib import Path
@@ -9,8 +10,11 @@ from typing import Any
 
 import yaml
 
+logger = logging.getLogger("warp-sub")
+
 DEFAULT_CONFIG: dict[str, Any] = {
-    "listen": ":8088",
+    # 注意：没有 listen 项。容器内端口由 uvicorn 启动参数固定为 8080，
+    # 宿主机端口用 compose 的 WARPSUB_PORT 映射。旧版的 WARPSUB_LISTEN 已废弃。
     "token": "",
     "data_dir": "./data",
     "schedule": "0 4 * * *",
@@ -121,6 +125,14 @@ DEFAULT_CONFIG: dict[str, Any] = {
 # Everything else runs with smart out-of-the-box defaults.
 SCHEMA: list[dict[str, Any]] = [
     {
+        "title": "edgetunnel 对接",
+        "fields": [
+            {"key": "vless.worker_host", "label": "Worker 域名", "type": "string", "help": "edgetunnel 的 Worker 域名，既是 TLS SNI 也是 Host；留空则跳过全部优选/探测环节，只出兜底节点"},
+            {"key": "vless.uuid", "label": "Worker UUID", "type": "string", "help": "edgetunnel 里配置的 UUID，与 Worker 域名成对必填"},
+            {"key": "vless.path", "label": "WebSocket 路径", "type": "string", "help": "默认 / ，与 edgetunnel 的 PATH 一致"},
+        ],
+    },
+    {
         "title": "运行与筛选策略",
         "fields": [
             {"key": "schedule", "label": "每日定时扫描", "type": "string", "help": "Cron 分 时 * * *，默认 0 4 * * *"},
@@ -146,7 +158,7 @@ ALLOWED_KEYS: set[str] = {
 } | {"vless.sources", "vless.proxy_sources", "fallback.sources"}
 
 ENV_KEYS = [
-    "WARPSUB_LISTEN", "WARPSUB_TOKEN", "WARPSUB_SCHEDULE", "WARPSUB_TZ",
+    "WARPSUB_TOKEN", "WARPSUB_SCHEDULE", "WARPSUB_TZ",
     "WARPSUB_DATA_DIR", "WARPSUB_VLESS_ENABLED", "WARPSUB_VLESS_HOST",
     "WARPSUB_VLESS_UUID", "WARPSUB_VLESS_PATH", "WARPSUB_VLESS_SOURCES",
     "WARPSUB_VLESS_VERIFY_DOMAINS", "WARPSUB_ALLOWED_COUNTRIES",
@@ -181,6 +193,19 @@ def _mask(s: str) -> str:
     return s[:3] + "******" + s[-2:]
 
 
+MASK_MARK = "******"
+
+
+def _looks_masked(value: Any) -> bool:
+    """Reject a masked value echoed back by an old panel tab.
+
+    The panel posts every schema field back on save; if a value arrives as the
+    ``abc******yz`` placeholder we must keep what is already stored instead of
+    committing the placeholder.
+    """
+    return isinstance(value, str) and MASK_MARK in value
+
+
 def _parse_bool(val: str) -> bool:
     return val.strip().lower() in {"1", "true", "yes", "on"}
 
@@ -189,10 +214,88 @@ def _parse_list(val: str) -> list[str]:
     return [x.strip() for x in val.replace("\n", ",").split(",") if x.strip()]
 
 
+CONFIG_TEMPLATE = """\
+# warp-sub 运行配置
+#
+# 本文件在首次启动时自动生成，之后由你维护。面板「配置」页的修改写在
+# 同目录的 override.json，不会动这里；优先级：
+#   环境变量 > override.json（面板）> 本文件 > 内置默认
+#
+# 令牌不写在这里：部署阶段在 .env 的 WARPSUB_TOKEN 里定，只留一个来源。
+#
+# 全新部署必做：把下面两项填成你 edgetunnel Worker 的值。留空时扫描会跳过
+# 全部优选/探测/测速环节（表现为「点一下立刻结束、没有节点」），只输出兜底节点。
+# 也可以在面板「配置 → edgetunnel 对接」里填，效果一样。
+
+vless:
+  # Worker 域名，既是 TLS SNI 也是 Host
+  worker_host: {worker_host}
+  # edgetunnel 的 UUID，与上一项成对必填
+  uuid: {uuid}
+  # WebSocket 路径，与 edgetunnel 的 PATH 一致
+  path: {path}
+
+# 其余项全部走内置默认值，需要时再取消注释：
+#
+# vless:
+#   verify_domains: [chatgpt.com, antigravity.google]
+#   allowed_countries: [JP, SG, US, TW]
+#   sources:            # 优选域名 / 优选 IP 列表
+#     - https://bestcf.tools12345.com/domain/mini.txt
+#
+# speed_test:
+#   required: false
+#   shortlist: 8
+"""
+
+
+def _resolve_data_dir() -> Path:
+    """Where the runtime state lives, before the config file is read."""
+    env_dir = os.environ.get("WARPSUB_DATA_DIR", "").strip()
+    if env_dir:
+        return Path(env_dir)
+    return Path(DEFAULT_CONFIG["data_dir"])
+
+
+def render_config_template() -> str:
+    """The starter config.yaml, pre-filled from env when it is already set."""
+    host = os.environ.get("WARPSUB_VLESS_HOST", "").strip()
+    user_uuid = os.environ.get("WARPSUB_VLESS_UUID", "").strip()
+    path = os.environ.get("WARPSUB_VLESS_PATH", "").strip() or "/"
+    return CONFIG_TEMPLATE.format(
+        worker_host=json.dumps(host, ensure_ascii=False),
+        uuid=json.dumps(user_uuid, ensure_ascii=False),
+        path=json.dumps(path, ensure_ascii=False),
+    )
+
+
+def ensure_config_file(data_dir: Path) -> Path | None:
+    """Create the config file once so a fresh deployment has something to edit.
+
+    A container started from the published image has an empty ``/data``; without
+    this the only editable surface was ``override.json``, which cannot carry the
+    edgetunnel fields. Never overwrites an existing file, never raises.
+    """
+    target = Path(os.environ.get("WARPSUB_CONFIG", "").strip() or (data_dir / "config.yaml"))
+    if target.is_file():
+        return None
+    try:
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(render_config_template(), encoding="utf-8")
+    except OSError as exc:
+        logger.warning(
+            "无法生成初始配置 %s（请在面板「配置 → edgetunnel 对接」里填 Worker 域名与 UUID）: %s",
+            target, exc,
+        )
+        return None
+    return target
+
+
 def find_config_path() -> Path | None:
     env_cfg = os.environ.get("WARPSUB_CONFIG", "").strip()
     candidates = [
         Path(env_cfg) if env_cfg else None,
+        _resolve_data_dir() / "config.yaml",
         Path("config.yaml"),
         Path("data/config.yaml"),
     ]
@@ -231,7 +334,6 @@ def load_raw_config() -> tuple[dict[str, Any], Path | None]:
 def _apply_env(cfg: dict[str, Any]) -> None:
     env = os.environ
     str_map = {
-        "WARPSUB_LISTEN": "listen",
         "WARPSUB_TOKEN": "token",
         "WARPSUB_SCHEDULE": "schedule",
         "WARPSUB_TZ": "timezone",
@@ -288,6 +390,13 @@ def active_env() -> dict[str, str]:
 class ConfigHolder:
     def __init__(self) -> None:
         self._lock = threading.RLock()
+        # 全新部署时 /data 是空的：先落一个带注释的模板，给用户一个可编辑的入口
+        created = ensure_config_file(_resolve_data_dir())
+        if created:
+            logger.info(
+                "已生成初始配置 %s，请在面板「配置 → edgetunnel 对接」填 Worker 域名与 UUID",
+                created,
+            )
         self._cfg, self._cfg_path = load_raw_config()
 
     def get(self) -> dict[str, Any]:
@@ -315,7 +424,7 @@ class ConfigHolder:
         with self._lock:
             ov = self.load_overlay()
             for k, v in patch.items():
-                if k in ALLOWED_KEYS:
+                if k in ALLOWED_KEYS and not _looks_masked(v):
                     ov[k] = v
             p = self.overlay_path()
             p.parent.mkdir(parents=True, exist_ok=True)
@@ -335,10 +444,10 @@ class ConfigHolder:
         cfg = self.get()
         if cfg.get("token"):
             cfg["token"] = _mask(str(cfg["token"]))
-        vless = cfg.get("vless", {})
-        if vless.get("uuid"):
-            vless["uuid"] = _mask(str(vless["uuid"]))
-        ech = vless.get("ech", {})
+        # uuid 现在是面板可编辑项（SCHEMA「edgetunnel 对接」），必须原样返回：
+        # 掩码会被面板回存，把真 UUID 覆盖成占位符。它和 worker_host 一样，
+        # 只有拿到本面板令牌才能读到。
+        ech = ((cfg.get("vless") or {}).get("ech") or {})
         if ech.get("clash_config"):
             ech["clash_config"] = _mask(str(ech["clash_config"]))
         return cfg

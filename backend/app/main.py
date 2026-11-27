@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import os
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
@@ -16,9 +17,18 @@ import httpx
 from .config import SCHEMA, ConfigHolder, active_env
 from .fallback import parse_subscription_text
 from .integrations import WritebackSyncer
+from .netfetch import fetch_text
 from .render import render_clash, render_v2ray
 from .scanner import run_scan
 from .store import Store
+
+logger = logging.getLogger("warp-sub")
+
+# uvicorn 只给自己的 logger 装 handler，应用自己的 info/warning 默认无处可去
+# （root 没有 handler 时只有 WARNING+ 会走 last-resort 打到 stderr）。
+# 首次部署“已生成初始配置”“WARPSUB_TOKEN 未设置”这类提示必须能在
+# `docker logs` 里看到，所以在这里装一次 root handler。
+logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 
 holder = ConfigHolder()
 store = Store(holder.data_dir())
@@ -125,12 +135,12 @@ async def _check_one_source(kind: str, url: str, mode: str = "vless") -> dict[st
     checked_at = datetime.now().strftime("%H:%M:%S")
     try:
         async with httpx.AsyncClient(timeout=10.0, follow_redirects=True) as client:
-            r = await client.get(url, headers={"User-Agent": "clash-verge/v2.0"})
+            r = await fetch_text(client, url, headers={"User-Agent": "clash-verge/v2.0"})
         ms = round((asyncio.get_event_loop().time() - t0) * 1000)
-        if r.status_code != 200:
+        if not r.ok:
             return {
                 "kind": kind, "mode": mode, "target": url, "ok": False, "count": 0, "ms": ms,
-                "checked_at": checked_at, "message": f"HTTP {r.status_code}",
+                "checked_at": checked_at, "message": r.message,
             }
         lines = [ln.strip() for ln in r.text.splitlines() if ln.strip() and not ln.strip().startswith("#")]
         if mode == "fallback":
@@ -167,8 +177,40 @@ async def _refresh_all_sources(cfg: dict[str, Any]) -> list[dict[str, Any]]:
     return results
 
 
+def _warn_if_open() -> None:
+    """A service reachable on the LAN with no token is an open proxy panel."""
+    if not str(holder.get().get("token") or "").strip():
+        logger.warning(
+            "WARPSUB_TOKEN 未设置：面板与订阅接口无任何鉴权，"
+            "局域网内任何人都能读取配置并触发扫描。请在 .env 设置 WARPSUB_TOKEN。"
+        )
+
+
+def _check_data_dir() -> None:
+    """A root-owned ./data is the most common fresh-deploy trap.
+
+    Docker creates a bind-mount directory as root when it does not exist, while
+    the image runs as uid 1000 — every state write then fails silently and the
+    panel looks broken. Say it out loud, with the fix.
+    """
+    data_dir = holder.data_dir()
+    try:
+        data_dir.mkdir(parents=True, exist_ok=True)
+        probe = data_dir / ".write-check"
+        probe.write_text("ok", encoding="utf-8")
+        probe.unlink(missing_ok=True)
+    except OSError as exc:
+        logger.warning(
+            "数据目录 %s 不可写（%s）：扫描结果、配置与历史都无法落盘。"
+            "请在宿主机执行 sudo chown -R 1000:1000 <本服务挂载的 data 目录>",
+            data_dir, exc,
+        )
+
+
 @asynccontextmanager
 async def lifespan(_: FastAPI):
+    _warn_if_open()
+    _check_data_dir()
     task = asyncio.create_task(_scheduler_loop())
     if not store.source_status():
         asyncio.create_task(_refresh_all_sources(holder.get()))

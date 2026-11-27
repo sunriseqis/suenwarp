@@ -14,6 +14,7 @@ import httpx
 
 from .ech import fetch_ech_config_list
 from .fallback import collect_and_probe_fallback
+from .netfetch import fetch_text
 from .render import effective_ws_path
 from .store import Store
 from .vless_client import probe_target_via_vless, speed_test_vless, tcp_connect_ms, ws_probe
@@ -120,12 +121,12 @@ async def _collect_vless_candidates(
                     continue
                 t0 = time.perf_counter()
                 try:
-                    resp = await client.get(src)
+                    got = await fetch_text(client, src)
                     ms = round((time.perf_counter() - t0) * 1000)
-                    if resp.status_code == 200:
+                    if got.ok:
                         added = 0
                         total_lines = 0
-                        for line in resp.text.splitlines():
+                        for line in got.text.splitlines():
                             if line.strip() and not line.strip().startswith("#"):
                                 total_lines += 1
                             if add_to(pool, line):
@@ -137,7 +138,7 @@ async def _collect_vless_candidates(
                                 "ok": total_lines > 0,
                                 "count": added,
                                 "ms": ms,
-                                "message": f"HTTP 200 · 共 {total_lines} 行，入池 {added} 条",
+                                "message": f"{got.label()} · 共 {total_lines} 行，入池 {added} 条",
                             })
                     else:
                         if source_logs is not None:
@@ -147,7 +148,7 @@ async def _collect_vless_candidates(
                                 "ok": False,
                                 "count": 0,
                                 "ms": ms,
-                                "message": f"HTTP {resp.status_code}",
+                                "message": got.message,
                             })
                 except Exception as e:
                     ms = round((time.perf_counter() - t0) * 1000)
@@ -210,9 +211,9 @@ async def _collect_proxy_ips(
             for src in proxy_sources:
                 t0 = time.perf_counter()
                 try:
-                    r = await client.get(src)
+                    r = await fetch_text(client, src)
                     ms = round((time.perf_counter() - t0) * 1000)
-                    if r.status_code == 200:
+                    if r.ok:
                         lines = [ln.split("#", 1)[0].strip() for ln in r.text.splitlines() if ln.strip() and not ln.strip().startswith("#")]
                         fetched.extend(lines)
                         if source_logs is not None:
@@ -222,10 +223,10 @@ async def _collect_proxy_ips(
                                 "ok": len(lines) > 0,
                                 "count": len(lines),
                                 "ms": ms,
-                                "message": f"HTTP 200 · 解析 {len(lines)} 条",
+                                "message": f"{r.label()} · 解析 {len(lines)} 条",
                             })
                     elif source_logs is not None:
-                        source_logs.append({"kind": "反代订阅", "target": src, "ok": False, "count": 0, "ms": ms, "message": f"HTTP {r.status_code}"})
+                        source_logs.append({"kind": "反代订阅", "target": src, "ok": False, "count": 0, "ms": ms, "message": r.message})
                 except Exception as e:
                     ms = round((time.perf_counter() - t0) * 1000)
                     if source_logs is not None:

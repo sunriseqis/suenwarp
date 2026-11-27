@@ -65,60 +65,127 @@ VL cf.1o.ee:443 · 110ms · 抖8ms
 ⑥ 取 TopN      每类各取前 N 个进订阅
 ```
 
-## 部署（镜像方式，推荐）
+## 部署
 
-CI 会把镜像构建并推到 GHCR（多架构：amd64 + arm64，群晖/威联通 ARM 机型可用）。
+`docker-compose.yml` 只有镜像、令牌、端口、挂载四件事：
+
+```yaml
+services:
+  warp-sub:
+    image: ghcr.io/sunriseqis/suenwarp:latest
+    container_name: warp-sub
+    restart: unless-stopped
+    environment:
+      WARPSUB_TOKEN: "${WARPSUB_TOKEN:?...}"
+    ports:
+      - "${WARPSUB_PORT:-8080}:8080"
+    volumes:
+      - ./data:/data
+```
 
 ```bash
-# 1. 填环境变量
+# 1. 部署时定下令牌（必填，不填 compose 直接报错，不会起无鉴权面板）
 cp .env.example .env
-vi .env        # 改 WARPSUB_IMAGE、WARPSUB_TOKEN、VLESS_HOST、VLESS_UUID
+vi .env                      # WARPSUB_TOKEN=你的令牌
+                             # 需要换端口再填 WARPSUB_PORT
 
 # 2. 起
 docker compose up -d
 
-# 3. 打开面板
-#    http://<nas-ip>:<WARPSUB_PORT>
+# 3. 打开面板，用同一个令牌登录
+#    http://<nas-ip>:8080
+
+# 4. 面板「配置 → edgetunnel 对接」填 Worker 域名 + UUID
+#    不填这一步，扫描会跳过全部优选/探测环节
 ```
 
-`.env` 里的 `WARPSUB_IMAGE` 要是你自己的镜像地址：
+### 全新部署必做：填 Worker 域名与 UUID
+
+扫描的全部候选都来自你 edgetunnel Worker 的入口，所以这两项成对必填，否则
+`run_scan` 的 VLESS 环节会被整体跳过——表现是**点「立即扫描」瞬间就结束、节点列表空空**，
+订阅里只有兜底免费节点（或什么都没有）。
+
+三个入口任选一个，优先级 **环境变量 > 面板（override.json）> data/config.yaml > 内置默认**：
+
+| 位置 | 怎么填 |
+|---|---|
+| 面板 | 「配置 → edgetunnel 对接」→ Worker 域名 / Worker UUID / WebSocket 路径 |
+| `data/config.yaml` | 首次启动会自动生成这个文件，改 `vless.worker_host` 与 `vless.uuid` |
+| `.env` | `WARPSUB_VLESS_HOST=...` `WARPSUB_VLESS_UUID=...` |
+
+容器里的 `data/config.yaml` 只在**首次启动、文件不存在**时生成一次，之后不再覆盖；
+改了 `override.json` 就是改面板的值，两者不冲突。
+
+### 令牌只有这一个来源
+
+令牌不在面板里，所以只有两级：**环境变量 > data/config.yaml > 内置默认**。部署阶段用 `.env` 定，之后就不必再碰。
+
+如果 `data/config.yaml` 里也写了 `token:`，它会被 `.env` 覆盖——**建议把 yaml 里那行删掉，只留一个来源**，免得回头改错了地方。
+
+### 其余配置放哪
+
+都在 `data/config.yaml`（挂载到容器 `/data`），或启动后在面板「配置」页改（写入 `data/override.json`）。
+
+容器内的数据目录、静态目录、监听端口都已写死在镜像里（Dockerfile `ENV` + uvicorn 参数），**不需要任何环境变量**。
+
+`data/` 里会生成：
 
 ```
-WARPSUB_IMAGE=ghcr.io/<你的GitHub用户名>/warp-sub:latest
+config.yaml     首次启动自动生成的配置模板（已有则不动）
+override.json   面板里改过的项
+account.json / masque.json / report.json / history.json / stability.json
 ```
 
-> 镜像默认是 **private**。第一次拉取前先登录：
-> `echo <你的PAT> | docker login ghcr.io -u <用户名> --password-stdin`
-> 或者在 GitHub 的 Packages 页面把包设为 public。
+备份 `data/` 就备份了一切。
+
+### 两个部署期才会踩到的坑
+
+**1. `data/` 的属主必须是 1000**
+
+镜像里以 `warp`（uid 1000）运行，而 `./data` 是宿主机目录。
+如果目录是 root 建的，容器写 `stability.json` 之类会报：
+
+```
+PermissionError: [Errno 13] Permission denied: '/data/stability.json.tmp'
+```
+
+现在启动时就会自检并在 `docker logs` 里直说：
+
+```
+WARNING warp-sub: 数据目录 /data 不可写（[Errno 13] Permission denied: '/data'）：
+扫描结果、配置与历史都无法落盘。请在宿主机执行 sudo chown -R 1000:1000 <本服务挂载的 data 目录>
+```
+
+修一次即可：
+
+```bash
+sudo chown -R 1000:1000 data
+```
+
+缓存写入失败只会告警、不会中断扫描。另外，如果只是**单个文件**的属主不对（例如 `/data` 曾被
+root 跑过一次，留下 `root:root 600` 的 `stability.json`），容器会把它删掉重写接管，日志里留一条：
+
+```
+WARNING warp-sub: stability.json 属主不是当前用户，已删除后重写接管
+```
+
+**2. GitHub raw 地址会被墙**
+
+默认源里有 `raw.githubusercontent.com` 的列表，国内直连经常失败。
+所有源拉取都走了镜像回退：直连 → `raw.gitmirror.com` → `ghfast.top` → `ghproxy.net` → `gh-proxy.com`。
+源状态里会标出实际走的是哪条路，例如：
+
+```
+HTTP 200 · 镜像 ghfast.top · 共 400 行，入池 312 条
+```
+
+镜像顺序写死在 [netfetch.py](</home/suenwarp/warp-sub/backend/app/netfetch.py>) 的 `PREFIX_MIRRORS`。
 
 ### 手动构建（不想用 CI 时）
 
 ```bash
 docker compose -f docker-compose.build.yml up -d --build
 ```
-
-## 环境变量
-
-`config.yaml` 不是必须的——下面这些环境变量可以完全替代它。
-优先级：环境变量 > config.yaml > 内置默认值。
-
-| 变量 | 说明 |
-|---|---|
-| `WARPSUB_TOKEN` | 面板/订阅令牌 |
-| `WARPSUB_PORT` | 宿主机端口（容器内固定 8080） |
-| `WARPSUB_SCHEDULE` | 定时扫描，如 `0 4 * * *` |
-| `WARPSUB_DATA_DIR` | 数据目录，容器内为 `/data` |
-| `WARPSUB_VLESS_ENABLED` | `true` 开启 VLESS 节点 |
-| `WARPSUB_VLESS_HOST` | edgetunnel 的 Worker 域名 |
-| `WARPSUB_VLESS_UUID` | edgetunnel 的 UUID |
-| `WARPSUB_VLESS_PATH` | 节点路径，默认 `/` |
-| `WARPSUB_VLESS_SOURCES` | 公开优选列表，逗号分隔 |
-| `WARPSUB_VLESS_VERIFY_DOMAINS` | 逐节点验证的站点，逗号分隔 |
-| `WARPSUB_ALLOWED_COUNTRIES` | 只保留这些出口国家的节点 |
-| `WARPSUB_EGRESS_PROBE` | 出口探测地址 |
-| `WARPSUB_SPEED_URL` | 测速目标（必须非 Cloudflare） |
-| `WARPSUB_SHORTLIST` | 进入真测速的节点数 |
-| `WARPSUB_SCAN_CONCURRENCY` | 探测并发 |
 
 ## CI
 
@@ -131,7 +198,7 @@ go vet + 编译  （PR 也跑，只构建不推送）
   ↓
 buildx 多架构构建 linux/amd64 + linux/arm64
   ↓
-推送 ghcr.io/<owner>/warp-sub
+推送 ghcr.io/sunriseqis/suenwarp
    latest        ← 默认分支
    1.2.3 / 1.2    ← v1.2.3 tag
    sha-xxxxxxx   ← 每次提交
@@ -148,6 +215,15 @@ buildx 多架构构建 linux/amd64 + linux/arm64
 - 看到每个候选的**延迟/抖动/丢包/速率**，以及被淘汰的具体原因
 - 「立即扫描」手动触发，或等每天定时任务
 - 复制双格式订阅链接
+
+### 订阅源列表怎么更新
+
+面板上那张「订阅源与反代实时状态」表 = `data/sources_status.json`，只放 http(s) 订阅链接。
+每次扫描结束**只按来源地址逐条更新**（状态、解析数、耗时、详情），表里原有的条目和分类
+（优选域名 / 优选 IP / 反代 ProxyIP / 兜底订阅）不会因为某次扫描没碰它就消失。
+
+扫描过程中的步骤日志（手填节点、CF 网段抽样、反代探测）只进 `data/report.json`，
+不进这张表——它们是这次扫描的诊断信息，不是订阅源。
 
 ## 订阅端点（固定链接）
 
